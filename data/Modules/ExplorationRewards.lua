@@ -109,12 +109,29 @@ local function onChat(form, ref, option)
 
 	if option == 0 then
 		if dataCount == 0 then
-			form:SetMessage("You don't have any unsold exploration data. Visit new systems to collect scan data automatically.")
+			form:SetMessage(
+				"Welcome to the Explorers' Guild data office.\n\n" ..
+				"HOW EXPLORATION WORKS:\n" ..
+				"- Travel to new star systems you haven't visited before\n" ..
+				"- Each first visit automatically records scan data and awards " .. Format.Money(FIRST_VISIT_BONUS, false) .. "\n" ..
+				"- Scan data value depends on the number of bodies in the system\n" ..
+				"- High-tech stations pay more for data (tech level bonus)\n" ..
+				"- Distant systems from Sol are worth more\n\n" ..
+				"MILESTONES:\n" ..
+				"  10 systems: Pathfinder (5,000 cr)\n" ..
+				"  25 systems: Scout (15,000 cr)\n" ..
+				"  50 systems: Explorer (40,000 cr)\n" ..
+				"  100 systems: Trailblazer (100,000 cr)\n" ..
+				"  250 systems: Vanguard (300,000 cr)\n" ..
+				"  500 systems: Pioneer (750,000 cr)\n\n" ..
+				"You don't have any unsold exploration data yet. Jump to a new system to start!"
+			)
 		else
 			local msg = string.format(
 				"Welcome to the Explorers' Guild data office.\n\n" ..
 				"You have scan data from %d system%s.\n" ..
 				"Systems explored to date: %d\n\n" ..
+				"Data value depends on bodies found, station tech level, and distance from Sol.\n\n" ..
 				"Would you like to sell your exploration data?",
 				dataCount, dataCount ~= 1 and "s" or "", state.total_explored
 			)
@@ -138,14 +155,30 @@ local function onChat(form, ref, option)
 		end
 
 		if sold > 0 then
+			-- Apply StationServices sensor calibration bonus if active
+			local sensorBonus = 0
+			local ok_ss, SS = pcall(function() return require('modules.StationServices') end)
+			if ok_ss and SS and SS.GetExplorationBonus then
+				local ok_b, bonus = pcall(function() return SS.GetExplorationBonus() end)
+				if ok_b and bonus and bonus > 0 then
+					sensorBonus = bonus
+					earned = math.floor(earned * (1.0 + bonus))
+				end
+			end
+
 			PlayerState.AddMoney(earned)
 			state.data_sold_count = state.data_sold_count + sold
 			state.unsold_data = {}
 
+			local bonusMsg = ""
+			if sensorBonus > 0 then
+				bonusMsg = string.format("\n(Sensor calibration bonus: +%d%%)", math.floor(sensorBonus * 100))
+			end
+
 			form:SetMessage(string.format(
-				"Excellent! Data from %d system%s sold for %s.\n\n" ..
+				"Excellent! Data from %d system%s sold for %s.%s\n\n" ..
 				"Total systems catalogued: %d\nKeep exploring, Commander!",
-				sold, sold ~= 1 and "s" or "", Format.Money(earned, false), state.data_sold_count
+				sold, sold ~= 1 and "s" or "", Format.Money(earned, false), bonusMsg, state.data_sold_count
 			))
 		else
 			form:SetMessage("No data to sell.")

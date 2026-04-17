@@ -49,7 +49,7 @@ local function refreshData()
 		smuggling = {},
 		passengers = {},
 		services = {},
-		crew_morale = 100,
+		crew_morale = 75,
 		news = {},
 	}
 
@@ -113,7 +113,7 @@ local function refreshData()
 	-- Crew
 	local CI = getModule('CrewInteractions')
 	if CI and CI.GetMorale then
-		data.crew_morale = CI.GetMorale() or 100
+		data.crew_morale = CI.GetMorale() or 75
 	end
 
 	-- News
@@ -190,15 +190,20 @@ local function drawDashboard()
 				drawSection("ACTIVE SYSTEM EVENTS", function()
 					local rows = {
 						separated = false,
-						{ "Event", "Severity", font = orbiteer.body },
+					{ "Event", "Severity", "Duration", font = orbiteer.body },
 					}
 					for _, evt in pairs(data.system_events) do
-						local name = evt.type or "Unknown"
+						local name = evt.name or "Unknown"
 						local severity = evt.severity and string.format("%.0f%%", evt.severity * 100) or "?"
-						table.insert(rows, { name, severity })
+						local remaining = ""
+						if evt.end_time and Game.time then
+							local hours = math.max(0, math.floor((evt.end_time - Game.time) / 3600))
+							remaining = tostring(hours) .. "h left"
+						end
+						table.insert(rows, { name, severity, remaining })
 					end
 					ui.withStyleVars({ItemSpacing = itemSpacing}, function()
-						textTable.drawTable(2, nil, rows)
+						textTable.drawTable(3, nil, rows)
 					end)
 				end)
 			end
@@ -258,6 +263,14 @@ local function drawDashboard()
 			ui.withStyleVars({ItemSpacing = itemSpacing}, function()
 				textTable.drawTable(2, nil, rows)
 			end)
+			ui.spacing()
+			ui.textColored(colors.alertYellow or colors.white, "HOW EXPLORATION WORKS:")
+			ui.textWrapped(
+				"Jump to new star systems to automatically record scan data and earn a first-visit bonus of $250. " ..
+				"Sell data at any station via the Explorers' Guild on the Bulletin Board. " ..
+				"High-tech stations pay more. Distant systems are worth more. " ..
+				"Milestones: Pathfinder (10), Scout (25), Explorer (50), Trailblazer (100), Vanguard (250), Pioneer (500)."
+			)
 		end)
 
 		-- ACTIVE BOUNTIES
@@ -336,14 +349,48 @@ local function drawDashboard()
 
 		-- CREW STATUS
 		drawSection("CREW STATUS", function()
-			ui.text("Morale: " .. tostring(data.crew_morale) .. "%")
-			local crewCount = 0
+			local morale = data.crew_morale or 75
+			local moraleColor = colors.white
+			local moraleText = "Normal"
+			if morale >= 80 then
+				moraleColor = colors.reticuleCircle or colors.white
+				moraleText = "High"
+			elseif morale >= 50 then
+				moraleColor = colors.alertYellow or colors.white
+				moraleText = "Normal"
+			else
+				moraleColor = colors.alertRed or colors.white
+				moraleText = "Low"
+			end
+			ui.textColored(moraleColor, string.format("Morale: %d%% (%s)", morale, moraleText))
+			local crewCount = 1 -- Commander (player)
 			pcall(function()
 				Game.player:EachCrewMember(function(m)
 					if m and not m.player then crewCount = crewCount + 1 end
 				end)
 			end)
-			ui.text("Crew members: " .. tostring(crewCount))
+			ui.text("Crew: " .. tostring(crewCount) .. " (including Commander)")
+
+			-- Show active service bonuses
+			local SS = getModule('StationServices')
+			if SS then
+				local bonuses = {}
+				local ok1, b1 = pcall(function() return SS.GetExplorationBonus() end)
+				if ok1 and b1 and b1 > 0 then table.insert(bonuses, string.format("Sensors +%d%%", math.floor(b1*100))) end
+				local ok2, b2 = pcall(function() return SS.GetBountyBonus() end)
+				if ok2 and b2 and b2 > 0 then table.insert(bonuses, string.format("Bounties +%d%%", math.floor(b2*100))) end
+				local ok3, b3 = pcall(function() return SS.GetFuelDiscount() end)
+				if ok3 and b3 and b3 > 0 then table.insert(bonuses, string.format("Fuel -%d%%", math.floor(b3*100))) end
+				local ok4, b4 = pcall(function() return SS.GetTradeBonus() end)
+				if ok4 and b4 and b4 > 0 then table.insert(bonuses, string.format("Trade +%d%%", math.floor(b4*100))) end
+				local ok5, b5 = pcall(function() return SS.GetRepairDiscount() end)
+				if ok5 and b5 and b5 > 0 then table.insert(bonuses, string.format("Repair -%d%%", math.floor(b5*100))) end
+				if #bonuses > 0 then
+					ui.spacing()
+					ui.textColored(colors.alertYellow or colors.white, "Active Bonuses:")
+					ui.textWrapped(table.concat(bonuses, " | "))
+				end
+			end
 		end)
 	end)
 end

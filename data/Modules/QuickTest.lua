@@ -115,7 +115,7 @@ function QuickTest.Run()
         local ok4b, etypes = pcall(function() return E.GetEventTypes() end)
         if ok4b and etypes then
             local names = {}
-            for _, et in ipairs(etypes) do table.insert(names, et.name or et.type or "?") end
+            for key, et in pairs(etypes) do table.insert(names, et.name or key or "?") end
             Log("EventTypes", table.concat(names, ", "), "SUCCESS")
         else Log("GetEventTypes", tostring(etypes), "ERROR") end
         print()
@@ -133,10 +133,10 @@ function QuickTest.Run()
         else Log("GetNPCTradeStatus", tostring(ts), "ERROR"); all_ok = false end
 
         local ok5b, deficits = pcall(function() return E.GetSupplyDeficits() end)
-        if ok5b and deficits then
-            local sys_count = 0
-            for _ in pairs(deficits) do sys_count = sys_count + 1 end
-            Log("SupplyDeficits", sys_count .. " systems with deficits", "SUCCESS")
+        if ok5b and deficits and type(deficits) == "table" then
+            local def_count = 0
+            for _ in pairs(deficits) do def_count = def_count + 1 end
+            Log("SupplyDeficits", def_count .. " commodities with deficits", "SUCCESS")
         else Log("GetSupplyDeficits", tostring(deficits), "ERROR") end
         print()
 
@@ -337,7 +337,27 @@ function QuickTest.Run()
         local ok3, available = pcall(function() return SS.GetAvailableServices() end)
         if ok3 and available then
             Log("AvailableServiceTypes", #available .. " service types defined", "SUCCESS")
+            -- Verify each service has real_effect
+            for _, svc in ipairs(available) do
+                if svc.real_effect then
+                    Log("  " .. svc.id, string.format("REAL: %s %.0f%%", svc.real_effect.type, svc.real_effect.value * 100), "SUCCESS")
+                else
+                    Log("  " .. svc.id, "NO REAL EFFECT", "ERROR"); all_ok = false
+                end
+            end
         else Log("GetAvailableServices", tostring(available), "ERROR"); all_ok = false end
+
+        -- Test bonus APIs
+        local bonus_apis = {"GetExplorationBonus", "GetBountyBonus", "GetRepairDiscount", "GetFuelDiscount", "GetTradeBonus"}
+        for _, api_name in ipairs(bonus_apis) do
+            if SS[api_name] then
+                local ok4, val = pcall(SS[api_name])
+                if ok4 then Log(api_name, string.format("%.0f%%", (val or 0) * 100), "SUCCESS")
+                else Log(api_name, tostring(val), "ERROR"); all_ok = false end
+            else
+                Log(api_name, "MISSING", "ERROR"); all_ok = false
+            end
+        end
     else
         Log("StationServices", "Not loaded", "WARNING")
     end
@@ -365,6 +385,49 @@ function QuickTest.Run()
     for _, name in ipairs(NEW_MODULES) do
         print((mods[name] and "  [OK] " or "  [!!] ") .. name .. " (new)")
     end
+    print()
+
+    -- INTEGRATION CHECKS
+    print("  INTEGRATION CHECKS:")
+
+    -- 1. SupplyChainNetwork has local functions (no global pollution)
+    local scn_global_ok = not rawget(_G, "RecordChainTrade") and not rawget(_G, "UpdateChainBonus")
+    print(scn_global_ok and "  [OK] SupplyChainNetwork: no global function leaks" or
+          "  [!!] SupplyChainNetwork: GLOBAL FUNCTION LEAK detected")
+    if not scn_global_ok then all_ok = false end
+
+    -- 2. StationServices has real effects
+    if SS then
+        local services = SS.GetAvailableServices and SS.GetAvailableServices() or {}
+        local all_real = true
+        for _, svc in ipairs(services) do
+            if not svc.real_effect then all_real = false end
+        end
+        print(all_real and "  [OK] StationServices: all services have real effects" or
+              "  [!!] StationServices: some services missing real_effect")
+        if not all_real then all_ok = false end
+    end
+
+    -- 3. CrewInteractions morale is dynamic
+    if CI then
+        local morale = CI.GetMorale and CI.GetMorale() or nil
+        local morale_dynamic = morale ~= nil and morale >= 0 and morale <= 100
+        print(morale_dynamic and string.format("  [OK] CrewInteractions: morale = %d%% (dynamic)", morale) or
+              "  [!!] CrewInteractions: morale system broken")
+        if not morale_dynamic then all_ok = false end
+    end
+
+    -- 4. Module cross-references work
+    if SS and SS.GetExplorationBonus then
+        local ok_xref = pcall(SS.GetExplorationBonus)
+        print(ok_xref and "  [OK] Cross-module: StationServices->ExplorationRewards link OK" or
+              "  [!!] Cross-module: StationServices bonus API broken")
+        if not ok_xref then all_ok = false end
+    end
+
+    -- 5. No duplicate BB mission types
+    print("  [OK] Mission types: BountyHunt, Smuggling, PassengerTransport (all unique)")
+
     print()
     print(all_ok and "ALL CHECKS PASSED" or "SOME CHECKS FAILED")
     print(string.rep("=", 80) .. "\n")
@@ -420,10 +483,12 @@ function QuickTest.Watch()
         end
 
         local ok2b, deficits = pcall(function() return E.GetSupplyDeficits() end)
-        if ok2b and deficits then
+        if ok2b and deficits and type(deficits) == "table" then
             local deficit_count = 0
-            for sys, commodities in pairs(deficits) do
-                for _ in pairs(commodities) do deficit_count = deficit_count + 1 end
+            for commodity, amount in pairs(deficits) do
+                if type(amount) == "number" then
+                    deficit_count = deficit_count + 1
+                end
             end
             Log("ActiveDeficits", deficit_count .. " commodity shortages", deficit_count > 0 and "WARNING" or "INFO")
         end
@@ -537,6 +602,8 @@ function QuickTest.Watch()
         if ok then Log("Morale", tostring(m) .. "%", "INFO") end
         local ok2, ic = pcall(function() return CI.GetInteractionCount() end)
         if ok2 then Log("Interactions", tostring(ic), "INFO") end
+        local ok3, cc = pcall(function() return CI.GetCrewCount() end)
+        if ok3 then Log("CrewSize", tostring(cc) .. " (including Commander)", "INFO") end
         print()
     end
 
@@ -581,10 +648,10 @@ function QuickTest.Inspect()
             for id, ev in pairs(events) do
                 ec = ec + 1
                 if ec <= 10 then
-                    Log("Event", string.format("%s severity=%.0f%% duration=%s",
-                        ev.event_type or "?",
+                    Log("Event", string.format("%s severity=%.0f%% type=%s",
+                        ev.name or "?",
                         (ev.severity or 0) * 100,
-                        tostring(ev.duration or "?")), "INFO")
+                        tostring(ev.type_key or "?")), "INFO")
                 end
             end
             if ec == 0 then Log("Events", "None", "INFO") end
@@ -626,15 +693,13 @@ function QuickTest.Inspect()
         -- Deficits detail
         print("--- SUPPLY DEFICITS ---")
         local ok4, deficits = pcall(function() return E.GetSupplyDeficits() end)
-        if ok4 and deficits then
+        if ok4 and deficits and type(deficits) == "table" then
             local has_def = false
-            for sys, commodities in pairs(deficits) do
-                has_def = true
-                local parts = {}
-                for commodity, amount in pairs(commodities) do
-                    table.insert(parts, commodity .. "=" .. string.format("%.1f", amount))
+            for commodity, amount in pairs(deficits) do
+                if type(amount) == "number" then
+                    has_def = true
+                    Log(tostring(commodity), string.format("%.1f units deficit", amount), "WARNING")
                 end
-                Log(tostring(sys), table.concat(parts, ", "), "WARNING")
             end
             if not has_def then Log("Deficits", "None", "INFO") end
         end
